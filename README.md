@@ -65,7 +65,7 @@ deploy/nginx.example.conf
    docker compose logs -f api
    ```
 
-Compose дождётся готовности PostgreSQL, применит Alembic-миграции и запустит API. Документация Swagger будет доступна на `http://localhost:8000/docs`, OpenAPI JSON — на `http://localhost:8000/openapi.json`.
+Compose дождётся готовности PostgreSQL, применит Alembic-миграции и запустит API. Документация Swagger будет доступна на `http://localhost:8000/docs`, OpenAPI JSON — на `http://localhost:8000/openapi.json`. При `APP_ENV=production` документация API (`/docs`, `/redoc`, `/openapi.json`) отключена.
 
 Остановка без удаления данных:
 

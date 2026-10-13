@@ -1,7 +1,14 @@
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   db:
     image: postgres:16-alpine
     restart: unless-stopped
+    logging: *default-logging
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-requests_db}
       POSTGRES_USER: ${POSTGRES_USER:-app}
@@ -19,6 +26,7 @@ services:
   api:
     build: .
     restart: unless-stopped
+    logging: *default-logging
     env_file:
       - .env
     environment:

@@ -62,11 +62,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await engine.dispose()
 
 
+# Interactive docs and the OpenAPI schema are not exposed in production.
+_docs_enabled = settings.app_env != "production"
+
 app = FastAPI(
     title=settings.app_name,
     description="API для приёма заявок с лендингов и уведомления команды в Telegram.",
     version="0.1.0",
     lifespan=lifespan,
+    docs_url="/docs" if _docs_enabled else None,
+    redoc_url="/redoc" if _docs_enabled else None,
+    openapi_url="/openapi.json" if _docs_enabled else None,
 )
 
 app.add_middleware(
