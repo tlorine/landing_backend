@@ -9,6 +9,8 @@ services:
     image: postgres:16-alpine
     restart: unless-stopped
     logging: *default-logging
+    labels:
+      com.centurylinklabs.watchtower.enable: "false"
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-requests_db}
       POSTGRES_USER: ${POSTGRES_USER:-app}
@@ -27,6 +29,8 @@ services:
     build: .
     restart: unless-stopped
     logging: *default-logging
+    labels:
+      com.centurylinklabs.watchtower.enable: "false"
     env_file:
       - .env
     environment:
