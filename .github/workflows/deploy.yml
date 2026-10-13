@@ -1,0 +1,270 @@
+name: Deploy
+
+# Deploys the exact commit that passed CI on main to the VPS.
+# There is NO automatic code rollback and NO database backup in this workflow:
+# on failure the previous commit is reported and rollback is a manual step.
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy to VPS
+    # Only a successful CI run for a push to main of this repository (never a PR or a fork).
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Manual approval only exists if required reviewers are configured for this
+    # environment in the repository settings; the workflow itself does not enforce it.
+    environment: production
+    env:
+      DEPLOY_SHA: ${{ github.event.workflow_run.head_sha }}
+
+    steps:
+      - name: Check that the commit is still the tip of main
+        id: tip
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$DEPLOY_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Unexpected commit SHA format."
+            exit 1
+          fi
+          main_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)"
+          if [[ "$main_sha" == "$DEPLOY_SHA" ]]; then
+            echo "deploy=true" >> "$GITHUB_OUTPUT"
+          else
+            # A newer commit is on main; it deploys after its own CI succeeds.
+            echo "::notice::Skipping $DEPLOY_SHA: main is now at $main_sha."
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Validate deploy configuration and prepare SSH
+        if: steps.tip.outputs.deploy == 'true'
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ vars.DEPLOY_KNOWN_HOSTS }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          set -euo pipefail
+          umask 077
+
+          # Report every missing value by name only, then fail once.
+          missing=0
+          for name in DEPLOY_HOST DEPLOY_USER DEPLOY_SSH_KEY TELEGRAM_BOT_TOKEN TELEGRAM_CHAT_ID; do
+            if [[ -z "${!name}" ]]; then
+              echo "::error::Secret $name is not set."
+              missing=1
+            fi
+          done
+          if [[ -z "$DEPLOY_KNOWN_HOSTS" ]]; then
+            echo "::error::Repository variable DEPLOY_KNOWN_HOSTS is not set."
+            missing=1
+          fi
+          [[ "$missing" -eq 0 ]] || exit 1
+
+          # Reject values that could be parsed as ssh options or break quoting.
+          if [[ ! "$DEPLOY_HOST" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*$ ]]; then
+            echo "::error::Secret DEPLOY_HOST must be a plain hostname or IPv4 address."
+            exit 1
+          fi
+          if [[ ! "$DEPLOY_USER" =~ ^[a-z_][a-z0-9_-]*$ ]]; then
+            echo "::error::Secret DEPLOY_USER has an unexpected format."
+            exit 1
+          fi
+          port="${DEPLOY_PORT:-22}"
+          if [[ ! "$port" =~ ^[0-9]{1,5}$ ]] || ((port < 1 || port > 65535)); then
+            echo "::error::Secret DEPLOY_PORT must be a TCP port number."
+            exit 1
+          fi
+          # Values limited to these characters need no quoting in .env and are safe in '...'.
+          if [[ ! "$TELEGRAM_BOT_TOKEN" =~ ^[0-9]+:[A-Za-z0-9_-]+$ ]]; then
+            echo "::error::Secret TELEGRAM_BOT_TOKEN has an unexpected format."
+            exit 1
+          fi
+          if [[ ! "$TELEGRAM_CHAT_ID" =~ ^(-?[0-9]+|@[A-Za-z][A-Za-z0-9_]{4,31})$ ]]; then
+            echo "::error::Secret TELEGRAM_CHAT_ID has an unexpected format."
+            exit 1
+          fi
+
+          mkdir -p "$RUNNER_TEMP/ssh"
+          printf '%s\n' "$DEPLOY_SSH_KEY" > "$RUNNER_TEMP/ssh/id_deploy"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$RUNNER_TEMP/ssh/known_hosts"
+
+          # The key must be unencrypted and well-formed; the derived public key is discarded.
+          if ! ssh-keygen -y -P '' -f "$RUNNER_TEMP/ssh/id_deploy" > /dev/null 2>&1; then
+            echo "::error::Secret DEPLOY_SSH_KEY is not a valid passphrase-less private key."
+            exit 1
+          fi
+          # The pinned host key must be present for exactly the host and port we connect to.
+          if [[ "$port" == "22" ]]; then host_entry="$DEPLOY_HOST"; else host_entry="[$DEPLOY_HOST]:$port"; fi
+          if ! ssh-keygen -F "$host_entry" -f "$RUNNER_TEMP/ssh/known_hosts" > /dev/null; then
+            echo "::error::DEPLOY_KNOWN_HOSTS has no host key for the configured DEPLOY_HOST/DEPLOY_PORT."
+            exit 1
+          fi
+
+      - name: Deploy commit on VPS
+        if: steps.tip.outputs.deploy == 'true'
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          set -uo pipefail
+
+          # The script and the Telegram values travel over SSH stdin: they never appear in
+          # command-line arguments on either side or in the job log.
+          {
+            printf "TG_TOKEN='%s'\n" "$TELEGRAM_BOT_TOKEN"
+            printf "TG_CHAT_ID='%s'\n" "$TELEGRAM_CHAT_ID"
+            cat <<'REMOTE'
+          set -euo pipefail
+
+          # Everything runs inside main(): bash parses the whole script before executing it,
+          # so a truncated transfer runs nothing and no command can swallow the rest from stdin.
+          main() {
+          exec < /dev/null
+          trap '' HUP
+          DEPLOY_SHA="$1"
+          cd /opt/landing-backend
+
+          [[ "$DEPLOY_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "Invalid commit SHA." >&2; exit 1; }
+          [[ -f .env ]] || { echo ".env is missing; create it manually before deploying." >&2; exit 1; }
+          command -v curl > /dev/null || { echo "curl is required on the server." >&2; exit 1; }
+
+          env_tmp=""
+          env_backup=""
+          up_log=""
+          cleanup() {
+            local status=$?
+            [[ -n "$env_tmp" ]] && rm -f "$env_tmp"
+            [[ -n "$up_log" ]] && rm -f "$up_log"
+            if [[ "$status" -ne 0 && -n "$env_backup" && -f "$env_backup" ]]; then
+              echo "The previous .env is kept as /opt/landing-backend/$env_backup (mode 600)." >&2
+            fi
+          }
+          trap cleanup EXIT
+
+          # Refuse to deploy over local edits to tracked files instead of discarding them.
+          if [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then
+            echo "Tracked files have local changes on the server; aborting." >&2
+            exit 1
+          fi
+
+          previous_sha="$(git rev-parse HEAD)"
+          git fetch --quiet --no-tags origin main
+          origin_main="$(git rev-parse origin/main)"
+          if [[ "$origin_main" != "$DEPLOY_SHA" ]]; then
+            # main moved after CI started; the newer commit deploys after its own CI.
+            echo "origin/main is now $origin_main, not $DEPLOY_SHA; nothing deployed."
+            exit 0
+          fi
+          # .env is ignored and untracked, so checkout leaves it alone.
+          git checkout --quiet --detach "$DEPLOY_SHA"
+          echo "Code: $previous_sha -> $DEPLOY_SHA"
+
+          # Keep a private copy of the current .env, then replace only the Telegram lines.
+          env_backup="$(mktemp .env.backup.XXXXXX)"
+          cp .env "$env_backup"
+          env_tmp="$(mktemp .env.XXXXXX)"
+          grep -v -E '^(TELEGRAM_BOT_TOKEN|TELEGRAM_CHAT_ID)=' .env > "$env_tmp" || [[ $? -eq 1 ]]
+          printf 'TELEGRAM_BOT_TOKEN=%s\nTELEGRAM_CHAT_ID=%s\n' "$TG_TOKEN" "$TG_CHAT_ID" >> "$env_tmp"
+          chmod 600 "$env_tmp" "$env_backup"
+          mv "$env_tmp" .env
+          env_tmp=""
+          unset TG_TOKEN TG_CHAT_ID
+
+          # Validate before touching containers; the rendered config holds secrets and is never printed.
+          docker compose config --quiet
+          compose_cfg="$(docker compose config)"
+          # Every published port entry ("- mode: ...") must carry host_ip 127.0.0.1; host
+          # networking would bypass port publishing entirely.
+          port_entries="$(grep -cE '^ +- mode: (ingress|host)$' <<< "$compose_cfg" || true)"
+          loopback="$(grep -cE '^ +host_ip: 127\.0\.0\.1$' <<< "$compose_cfg" || true)"
+          host_network="$(grep -cE '^ +network_mode: host$' <<< "$compose_cfg" || true)"
+          unset compose_cfg
+          if [[ "$port_entries" -ne "$loopback" || "$host_network" -ne 0 ]]; then
+            echo "Compose publishes a port outside 127.0.0.1 or uses host networking; aborting before recreating services." >&2
+            exit 1
+          fi
+
+          # Building only replaces the image; running containers are untouched if it fails.
+          docker compose build
+          # Recreate with output in a file, so a dropped SSH session cannot kill compose mid-way.
+          up_log="$(mktemp)"
+          if ! docker compose up -d --no-build > "$up_log" 2>&1; then
+            cat "$up_log" >&2
+            exit 1
+          fi
+          cat "$up_log"
+
+          for attempt in $(seq 1 30); do
+            if curl -fsS --max-time 5 -o /dev/null http://127.0.0.1:8000/api/v1/health/ready; then
+              echo "API is ready (attempt $attempt)."
+              rm -f "$env_backup"
+              exit 0
+            fi
+            sleep 5
+          done
+
+          echo "API did not become ready. Previous commit: $previous_sha" >&2
+          docker compose ps --format 'table {{.Service}}\t{{.State}}\t{{.Health}}' >&2
+          exit 1
+          }
+          main "$@"
+          REMOTE
+          } | ssh \
+            -i "$RUNNER_TEMP/ssh/id_deploy" \
+            -p "${DEPLOY_PORT:-22}" \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$RUNNER_TEMP/ssh/known_hosts" \
+            -o GlobalKnownHostsFile=/dev/null \
+            -o LogLevel=ERROR \
+            -o ConnectTimeout=15 \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=4 \
+            "$DEPLOY_USER@$DEPLOY_HOST" \
+            "bash -s -- $DEPLOY_SHA"
+          status=$?
+
+          # ssh itself exits with 255 on connection, host key or authentication errors.
+          if [[ "$status" -eq 255 ]]; then
+            echo "::error::SSH failed (connection, host key mismatch, authentication or a dropped session). If it dropped mid-deploy, check the server state manually."
+            exit 1
+          elif [[ "$status" -ne 0 ]]; then
+            echo "::error::Remote deploy failed with exit code $status; see the messages above."
+            exit 1
+          fi
+
+      - name: Report manual recovery
+        if: failure() && steps.tip.outputs.deploy == 'true'
+        run: |
+          echo "::warning::No automatic rollback and no database backup were performed."
+          echo "::warning::To roll back on the server: git checkout --detach <previous commit> && docker compose up -d --build (only if migrations are compatible)."
+
+      - name: Remove SSH material
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/ssh"
