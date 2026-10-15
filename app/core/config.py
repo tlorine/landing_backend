@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import Field, SecretStr, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -31,6 +31,21 @@ class Settings(BaseSettings):
 
     notification_poll_interval_seconds: float = Field(default=3.0, ge=1.0, le=60.0)
     notification_retry_max_seconds: int = Field(default=3600, ge=60, le=86400)
+
+    @field_validator("cors_origins")
+    @classmethod
+    def validate_cors_origins(cls, origins: list[str]) -> list[str]:
+        # The browser sends Origin without a trailing slash; a mismatch silently blocks requests.
+        normalized = [origin.strip().rstrip("/") for origin in origins]
+        for origin in normalized:
+            if origin == "*":
+                raise ValueError("CORS_ORIGINS must list exact origins; '*' is not allowed.")
+            scheme, sep, host = origin.partition("://")
+            if scheme not in ("http", "https") or not sep or not host or "/" in host:
+                raise ValueError(
+                    f"Invalid CORS origin {origin!r}: expected scheme://host[:port] without a path."
+                )
+        return normalized
 
     @model_validator(mode="after")
     def validate_telegram_credentials(self) -> Settings:
