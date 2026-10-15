@@ -13,6 +13,8 @@
 - Если Telegram временно недоступен, заявка всё равно сохраняется, а API не заставляет пользователя отправлять форму повторно.
 - Alembic-миграция, health endpoints, CORS-настройка, единый формат ошибок, Docker Compose, тесты валидации.
 - Секреты задаются через `.env`; токен Telegram не выводится в логах.
+- `POST /api/v1/visits` — анонимные визиты с лендингов (без cookies, IP не сохраняется).
+- Команды бота `/visits`, `/sources`, `/help` в чате `TELEGRAM_CHAT_ID` — статистика за календарный период.
 
 ## Структура
 
@@ -24,7 +26,11 @@ app/
       endpoints/
         health.py             # liveness/readiness
         requests.py           # POST /requests
+        visits.py             # POST /visits
       router.py
+  bot/
+    commands.py               # разбор команд бота
+    formatting.py             # HTML-отчёты для Telegram
   core/
     config.py                 # настройки из окружения
     logging.py
@@ -34,15 +40,25 @@ app/
   models/
     service_request.py        # SQLAlchemy-модель заявки
     notification_outbox.py    # состояние доставки уведомлений
+    site_visit.py             # визиты и соли дня
   repositories/
     service_requests.py
     notification_outbox.py
+    site_visits.py            # запись визитов и агрегаты
   schemas/
     service_request.py        # входная валидация и ответ
+    site_visit.py             # валидация визита
   services/
     submissions.py            # атомарное создание заявки + outbox
     telegram.py               # Telegram Bot API
     notification_worker.py    # очередь, повторы, восстановление зависших задач
+    visits.py                 # запись визита и хэш посетителя
+    user_agent.py             # ОС, браузер, устройство, фильтр ботов
+    periods.py                # календарные периоды
+    visit_stats.py            # статистика без зависимости от Telegram
+    telegram_bot.py           # Bot API для команд
+    bot_worker.py             # long-polling команд
+    visit_retention.py        # удаление старых визитов и солей
 migrations/
 tests/
 deploy/nginx.example.conf
@@ -168,6 +184,37 @@ Health endpoints:
 
 Ошибки доставки повторяются с увеличивающейся задержкой. Если процесс упадёт во время обработки, зависшая задача может быть подобрана повторно через пять минут. В редком случае сбоя между успешной отправкой в Telegram и отметкой в БД сообщение может прийти повторно — это стандартное ограничение доставки «как минимум один раз».
 
+## Статистика посещений
+
+### `POST /api/v1/visits`
+
+Фронтенд отправляет один `navigator.sendBeacon` на загрузку страницы с `Content-Type: text/plain;charset=UTF-8` (без CORS preflight); `application/json` тоже принимается. Тело — JSON не больше 2 КБ:
+
+```json
+{"source_site":"studio-landing","path":"/en","locale":"en","device_type":"mobile",
+ "referrer_host":"partner.example.org","utm_source":"telegram","utm_medium":"post","utm_campaign":"launch_oct"}
+```
+
+Обязательны только `source_site` и `path`. Ответ — `204 No Content`; ошибки: `400` (не JSON), `413` (больше 2 КБ), `422` (валидация), `429` (больше `VISITS_RATE_LIMIT_PER_MINUTE` в минуту с одного IP + User-Agent). Запросы без User-Agent и от ботов получают `204` и не записываются.
+
+Сервер использует заголовки Cloudflare: `CF-IPCountry` — страна (`XX`/`T1` = не определено), `CF-Connecting-IP` — IP посетителя. Поэтому API должен быть доступен только через Cloudflare с включённым IP Geolocation: без прокси эти заголовки может подделать клиент.
+
+**Приватность.** IP не сохраняется ни в БД, ни в логах (строки access-лога для `/api/v1/visits` отфильтрованы). Посетитель считается по `sha256(соль_дня || ip || UA || source_site)`; соль дня случайная и удаляется после вчерашнего дня, после чего хэш нельзя связать с IP. Поэтому «посетители» уникальны только в пределах суток. Визиты старше `VISITS_RETENTION_MONTHS` удаляются автоматически раз в 6 часов.
+
+### Команды бота
+
+Если заданы `TELEGRAM_BOT_TOKEN` и `TELEGRAM_CHAT_ID` и `TELEGRAM_COMMANDS_ENABLED=true`, API через long polling (`getUpdates`) отвечает в чате `TELEGRAM_CHAT_ID` (сообщения из других чатов игнорируются):
+
+- `/visits [период]` — визиты, посетители, заявки и конверсия, страны, устройства, ОС, браузеры, язык;
+- `/sources [период]` — источники переходов и UTM-кампании;
+- `/help` — справка.
+
+Период календарный по `STATS_TIMEZONE` (по умолчанию Москва), текущий день/неделя/месяц включены: `7d`/`7 дней` (до 366), `2w`/`2 недели` (до 52), `3m`/`3 месяца` (до 12). Без периода — 7 дней.
+
+- `TELEGRAM_CHAT_ID` должен быть числовым id чата (не `@username`), иначе команды не будут совпадать с чатом.
+- В группе с включённым privacy mode бот гарантированно видит команды вида `/visits@имя_бота`.
+- Long polling несовместим с webhook: если на боте установлен webhook, в логах будет ошибка `409`; webhook автоматически не удаляется.
+
 ## Подключение фронтенда
 
 С обоих Next.js сайтов отправляй одинаковый JSON на абсолютный URL API, например `https://api.example.com/api/v1/requests`. В `source_site` можно передать `main-landing` / `ai-landing` или имя домена. Значение приходит с клиента, поэтому оно удобно для аналитики, но не является криптографически подтверждённым источником.
@@ -182,7 +229,7 @@ CORS — это ограничение для браузеров, а не защ
 
 ## Миграции и тесты
 
-Миграция `0001_create_requests_and_outbox` применяется командой `alembic upgrade head` (Compose делает это при старте API). После изменения моделей создай миграцию командой `alembic revision --autogenerate -m "describe change"`, затем обязательно проверь сгенерированный файл перед применением.
+Миграции `0001_create_requests_and_outbox` и `0002_site_visits` применяются командой `alembic upgrade head` (Compose делает это при старте API). После изменения моделей создай миграцию командой `alembic revision --autogenerate -m "describe change"`, затем обязательно проверь сгенерированный файл перед применением.
 
 Запуск тестов:
 

@@ -20,8 +20,14 @@ from app.core.config import settings
 from app.core.logging import configure_logging
 from app.db.session import SessionFactory, engine
 from app.repositories.notification_outbox import NotificationOutboxRepository
+from app.repositories.service_requests import ServiceRequestRepository
+from app.repositories.site_visits import SiteVisitRepository
+from app.services.bot_worker import TelegramCommandWorker
 from app.services.notification_worker import NotificationWorker
 from app.services.telegram import TelegramNotifier
+from app.services.telegram_bot import TelegramBotApi
+from app.services.visit_retention import VisitRetentionWorker
+from app.services.visit_stats import VisitStatsService
 
 configure_logging()
 logger = logging.getLogger(__name__)
@@ -31,6 +37,12 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     worker_task: asyncio.Task[None] | None = None
     notifier: TelegramNotifier | None = None
+    command_task: asyncio.Task[None] | None = None
+    bot_api: TelegramBotApi | None = None
+
+    # Retention runs regardless of Telegram: old visits and salts must be deleted anyway.
+    retention = VisitRetentionWorker(SessionFactory, SiteVisitRepository(), settings)
+    retention_task = asyncio.create_task(retention.run(), name="visit-retention-worker")
 
     if settings.telegram_enabled:
         bot_token = settings.telegram_bot_token
@@ -45,6 +57,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         )
         worker_task = asyncio.create_task(worker.run(), name="telegram-notification-worker")
         logger.info("Telegram notification worker started")
+
+        if settings.telegram_commands_enabled:
+            bot_api = TelegramBotApi(bot_token, settings.telegram_poll_timeout_seconds)
+            stats_service = VisitStatsService(
+                session_factory=SessionFactory,
+                visit_repository=SiteVisitRepository(),
+                request_repository=ServiceRequestRepository(),
+                tz=settings.stats_zone,
+            )
+            command_worker = TelegramCommandWorker(bot_api, stats_service, settings)
+            command_task = asyncio.create_task(command_worker.run(), name="telegram-command-worker")
     else:
         logger.warning(
             "Telegram notifications are disabled; configure TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID"
@@ -53,12 +76,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
-        if worker_task is not None:
-            worker_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await worker_task
+        for task in (worker_task, command_task, retention_task):
+            if task is not None:
+                task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await task
         if notifier is not None:
             await notifier.aclose()
+        if bot_api is not None:
+            await bot_api.aclose()
         await engine.dispose()
 
 
