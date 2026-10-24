@@ -144,11 +144,15 @@ class AnalyticsReportsService:
                 shift_months(now.date(), -settings.analytics_retention_months), time.min, UTC
             )
             first = min((r.started_at for r in coverage_rows), default=None)
+            visitor_first = await self.repository.visitor_available_from(
+                session, filters.source_site
+            )
             session_first = min(
                 (r.started_at for r in coverage_rows if r.sessions_enabled), default=None
             )
             available = max(first, retention) if first else None
             session_available = max(session_first, retention) if session_first else None
+            visitor_available = max(visitor_first, retention) if visitor_first else None
             start, end = filters.bounds()
             pstart, pend = filters.bounds(previous=True)
 
@@ -170,6 +174,8 @@ class AnalyticsReportsService:
 
             partial = not covered(start, end)
             previous_partial = not covered(pstart, pend)
+            visitor_partial = visitor_available is None or start < visitor_available
+            previous_visitor_partial = visitor_available is None or pstart < visitor_available
             session_partial = not covered(start, end, sessions=True)
             previous_session_partial = not covered(pstart, pend, sessions=True)
             sessions = session_available is not None and any(
@@ -192,11 +198,19 @@ class AnalyticsReportsService:
                     None
                     if previous_partial
                     or (key == "sessions" and (session_partial or previous_session_partial))
+                    or (key == "visitors" and previous_visitor_partial)
                     else previous[key]
                 )
-                delta = value - old if value is not None and old is not None else None
+                current_value = (
+                    None
+                    if key == "visitors" and (visitor_available is None or end <= visitor_available)
+                    else value
+                )
+                delta = (
+                    current_value - old if current_value is not None and old is not None else None
+                )
                 summary[key] = {
-                    "value": value,
+                    "value": current_value,
                     "previous_value": old,
                     "delta_abs": delta,
                     "delta_percent": delta / old if old and delta is not None else None,
@@ -206,18 +220,23 @@ class AnalyticsReportsService:
             series = []
             day = filters.start
             while day < filters.end:
-                series.append(
-                    indexed.get(
-                        day.isoformat(),
-                        {
-                            "date": day.isoformat(),
-                            "page_views": 0,
-                            "sessions": 0 if sessions else None,
-                            "case_views": 0,
-                            "outbound_clicks": 0,
-                        },
-                    )
+                point = indexed.get(
+                    day.isoformat(),
+                    {
+                        "date": day.isoformat(),
+                        "page_views": 0,
+                        "sessions": 0 if sessions else None,
+                        "case_views": 0,
+                        "outbound_clicks": 0,
+                        "visitors": 0,
+                    },
                 )
+                day_end = datetime.combine(
+                    day + timedelta(days=1), time.min, ZoneInfo(filters.timezone)
+                ).astimezone(UTC)
+                if visitor_available is None or day_end <= visitor_available:
+                    point["visitors"] = None
+                series.append(point)
                 day += timedelta(days=1)
             countries = (
                 await self.repository.breakdown(session, filters, start, end, "country")
@@ -242,6 +261,17 @@ class AnalyticsReportsService:
                 warnings.append("Предыдущий период покрыт не полностью; сравнение недоступно.")
             if sessions and session_partial:
                 warnings.append("Сессионные данные покрывают период не полностью.")
+            if visitor_available is None or end <= visitor_available:
+                for group in (*countries, *sources, *devices):
+                    group["visitor_count"] = group["visitor_share"] = None
+                for case in cases:
+                    case["case_view_visitors"] = case["outbound_visitors"] = None
+                    case["visitor_conversion"] = None
+            if visitor_partial:
+                warnings.append(
+                    "Подсчёт анонимных посетителей ведётся с даты начала передачи visitor ID; "
+                    "для выбранного периода это может быть неполная оценка."
+                )
             if not sessions:
                 warnings.append("Сессионные метрики пока недоступны.")
             if end > now:
@@ -254,6 +284,7 @@ class AnalyticsReportsService:
                 "coverage": {
                     "available_from": available,
                     "session_available_from": session_available,
+                    "visitor_available_from": visitor_available,
                     "partial": partial,
                     "previous_partial": previous_partial,
                 },
@@ -267,7 +298,11 @@ class AnalyticsReportsService:
             }
             if detail:
                 payload["case"] = next(row for row in cases if row["id"] == filters.case_id)
-                payload["funnel"] = await self.repository.funnel(session, filters, start, end)
+                funnel = await self.repository.funnel(session, filters, start, end)
+                if visitor_available is None or end <= visitor_available:
+                    funnel["visitor_opens"] = funnel["visitor_views"] = None
+                    funnel["visitor_outbound"] = None
+                payload["funnel"] = funnel
                 payload["links"] = await self.repository.links(session, filters, start, end)
             return (
                 DetailResponse.model_validate(payload)

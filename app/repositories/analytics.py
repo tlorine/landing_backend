@@ -17,7 +17,11 @@ class AnalyticsRepository:
     async def insert_event(
         self, session: AsyncSession, event: AnalyticsEventCreate, country: str | None
     ) -> bool:
-        payload_hash = hashlib.sha256(event.model_dump_json().encode()).hexdigest()
+        hash_exclude = {"visitor_id"} if event.visitor_id is None else set()
+        # A missing optional ID must keep pre-visitor retry hashes stable after rollout.
+        payload_hash = hashlib.sha256(
+            event.model_dump_json(exclude=hash_exclude).encode()
+        ).hexdigest()
         values = event.model_dump(exclude={"entry_context"})
         values.update(payload_hash=payload_hash, country=country)
         statement = (

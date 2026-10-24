@@ -1,4 +1,4 @@
-from sqlalchemy import String, and_, cast, distinct, exists, func, literal, select
+from sqlalchemy import String, and_, cast, distinct, exists, func, literal, or_, select
 from sqlalchemy.orm import aliased
 
 from app.models.analytics import AnalyticsCoverage
@@ -53,6 +53,7 @@ class AnalyticsReportsRepository:
             func.count()
             .filter(events.c.event_type == "case_outbound_click")
             .label("outbound_clicks"),
+            func.count(distinct(events.c.visitor_id)).label("visitors"),
         ]
 
     async def totals(self, session, filters, start, end, sessions):
@@ -61,6 +62,13 @@ class AnalyticsReportsRepository:
             (await session.execute(select(*self.counts(events, sessions)).select_from(events)))
             .mappings()
             .one()
+        )
+
+    async def visitor_available_from(self, session, source_site):
+        return await session.scalar(
+            select(func.min(E.occurred_at)).where(
+                E.source_site == source_site, E.visitor_id.is_not(None)
+            )
         )
 
     async def has_sessions(self, session, filters, start, end):
@@ -90,29 +98,78 @@ class AnalyticsReportsRepository:
             if dimension == "country"
             else [events.c.source_value, events.c.source_type]
         )
-        count = func.count(distinct(events.c.session_id))
+        session_count = func.count(distinct(events.c.session_id))
+        visitor_count = func.count(distinct(events.c.visitor_id))
         rows = (
-            await session.execute(
-                select(*columns, count.label("count"))
-                .where(events.c.session_id.is_not(None))
-                .group_by(*columns)
-                .order_by(count.desc())
+            (
+                await session.execute(
+                    select(
+                        *columns, session_count.label("count"), visitor_count.label("visitor_count")
+                    )
+                    .where(events.c.session_id.is_not(None))
+                    .group_by(*columns)
+                    .order_by(session_count.desc())
+                )
             )
-        ).all()
-        total = sum(row[-1] for row in rows)
+            .mappings()
+            .all()
+        )
+        visitor_total = await session.scalar(
+            select(func.count(distinct(events.c.visitor_id))).where(
+                events.c.session_id.is_not(None)
+            )
+        )
+        key_column = "entry_country" if dimension == "country" else "source_value"
+        total = sum(row["count"] for row in rows)
         result = []
         for row in rows[:20]:
-            item = {"key": row[0], "count": row[-1], "share": row[-1] / total if total else 0}
+            item = {
+                "key": row[key_column],
+                "count": row["count"],
+                "share": row["count"] / total if total else 0,
+                "visitor_count": row["visitor_count"],
+                "visitor_share": row["visitor_count"] / visitor_total if visitor_total else 0,
+            }
             if dimension == "source":
-                item["source_type"] = row[1] or "direct_unknown"
+                item["source_type"] = row["source_type"] or "direct_unknown"
             result.append(item)
-        rest = sum(row[-1] for row in rows[20:])
+        rest_rows = rows[20:]
+        rest = sum(row["count"] for row in rest_rows)
         if rest:
+            # A visitor may appear in several tail categories. Count IDs once in “other”.
+            if dimension == "country":
+                tail = or_(
+                    *[
+                        events.c.entry_country.is_(None)
+                        if row["entry_country"] is None
+                        else events.c.entry_country == row["entry_country"]
+                        for row in rest_rows
+                    ]
+                )
+            else:
+                tail = or_(
+                    *[
+                        and_(
+                            events.c.source_value.is_(None)
+                            if row["source_value"] is None
+                            else events.c.source_value == row["source_value"],
+                            events.c.source_type == row["source_type"],
+                        )
+                        for row in rest_rows
+                    ]
+                )
+            rest_visitors = await session.scalar(
+                select(func.count(distinct(events.c.visitor_id))).where(
+                    events.c.session_id.is_not(None), tail
+                )
+            )
             result.append(
                 {
                     "key": "other",
                     "count": rest,
-                    "share": rest / total,
+                    "share": rest / total if total else 0,
+                    "visitor_count": rest_visitors or 0,
+                    "visitor_share": (rest_visitors or 0) / visitor_total if visitor_total else 0,
                     **({"source_type": "other"} if dimension == "source" else {}),
                 }
             )
@@ -122,18 +179,29 @@ class AnalyticsReportsRepository:
         events = self.scoped(filters, start, end)
         rows = (
             await session.execute(
-                select(events.c.device_type, func.count().label("count"))
+                select(
+                    events.c.device_type,
+                    func.count().label("count"),
+                    func.count(distinct(events.c.visitor_id)).label("visitor_count"),
+                )
                 .where(events.c.event_type == "page_view")
                 .group_by(events.c.device_type)
                 .order_by(func.count().desc(), events.c.device_type)
             )
         ).all()
         total = sum(row.count for row in rows)
+        visitor_total = await session.scalar(
+            select(func.count(distinct(events.c.visitor_id))).where(
+                events.c.event_type == "page_view"
+            )
+        )
         return [
             {
                 "key": row.device_type,
                 "count": row.count,
                 "share": row.count / total if total else 0,
+                "visitor_count": row.visitor_count,
+                "visitor_share": row.visitor_count / visitor_total if visitor_total else 0,
             }
             for row in rows
         ]
@@ -142,17 +210,26 @@ class AnalyticsReportsRepository:
         events = self.scoped(filters, start, end)
         view = and_(events.c.event_type == "page_view", events.c.case_id.is_not(None))
         click = aliased(E)
+        click_matches_view = (
+            click.source_site == events.c.source_site,
+            click.page_view_id == events.c.page_view_id,
+            click.case_id == events.c.case_id,
+            click.locale == events.c.locale,
+            click.event_type == "case_outbound_click",
+            click.occurred_at >= events.c.occurred_at,
+            click.occurred_at < end,
+            click.sequence > events.c.sequence,
+        )
         converted = exists(
             select(click.event_id).where(
-                click.source_site == events.c.source_site,
-                click.page_view_id == events.c.page_view_id,
-                click.case_id == events.c.case_id,
-                click.session_id == events.c.session_id,
-                click.locale == events.c.locale,
-                click.event_type == "case_outbound_click",
-                click.occurred_at >= events.c.occurred_at,
-                click.occurred_at < end,
-                click.sequence > events.c.sequence,
+                *click_matches_view, click.session_id == events.c.session_id
+            )
+        )
+        visitor_converted = exists(
+            select(click.event_id).where(
+                *click_matches_view,
+                events.c.visitor_id.is_not(None),
+                click.visitor_id == events.c.visitor_id,
             )
         )
         rows = await session.execute(
@@ -167,6 +244,10 @@ class AnalyticsReportsRepository:
                 func.count(distinct(events.c.session_id))
                 .filter(and_(view, converted))
                 .label("outbound_sessions"),
+                func.count(distinct(events.c.visitor_id)).filter(view).label("case_view_visitors"),
+                func.count(distinct(events.c.visitor_id))
+                .filter(and_(view, visitor_converted))
+                .label("outbound_visitors"),
             )
             .where(events.c.case_id.is_not(None))
             .group_by(events.c.case_id)
@@ -185,10 +266,17 @@ class AnalyticsReportsRepository:
                     "case_view_sessions": 0,
                     "outbound_clicks": 0,
                     "outbound_sessions": 0,
+                    "case_view_visitors": 0,
+                    "outbound_visitors": 0,
                 },
             )
             row["id"] = row.pop("case_id")
             row["has_outbound_link"] = manifest["has_outbound_link"]
+            row["visitor_conversion"] = (
+                row["outbound_visitors"] / row["case_view_visitors"]
+                if row["case_view_visitors"] and manifest["has_outbound_link"]
+                else None
+            )
             row["conversion"] = (
                 row["outbound_sessions"] / row["case_view_sessions"]
                 if sessions and row["case_view_sessions"] and manifest["has_outbound_link"]
@@ -240,6 +328,13 @@ class AnalyticsReportsRepository:
                         func.count(distinct(identity)).label("opens"),
                         func.count(distinct(identity)).filter(views).label("views"),
                         func.count(distinct(identity)).filter(outbound).label("outbound"),
+                        func.count(distinct(opens.c.visitor_id)).label("visitor_opens"),
+                        func.count(distinct(opens.c.visitor_id))
+                        .filter(views)
+                        .label("visitor_views"),
+                        func.count(distinct(opens.c.visitor_id))
+                        .filter(outbound)
+                        .label("visitor_outbound"),
                     ).where(opens.c.event_type == "case_open")
                 )
             )

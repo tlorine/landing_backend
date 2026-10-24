@@ -113,6 +113,7 @@ def event(
     navigation_id=None,
     at=None,
     sequence=1,
+    visitor_id=None,
 ):
     now = at or datetime.now(UTC) - timedelta(seconds=5)
     result = {
@@ -122,6 +123,7 @@ def event(
         "source_site": "studio-landing",
         "page_view_id": str(page_view_id or uuid4()),
         "session_id": str(session_id or uuid4()),
+        "visitor_id": str(visitor_id) if visitor_id else None,
         "navigation_id": str(navigation_id) if navigation_id else None,
         "sequence": sequence,
         "path": f"/cases/{case_id}" if case_id and kind != "case_open" else "/",
@@ -161,6 +163,17 @@ async def test_concurrent_duplicate_projection_and_conflict(client, database):
         assert await session.scalar(select(func.count()).select_from(SiteVisit)) == 1
 
 
+async def test_legacy_payload_without_visitor_id_has_stable_retry_hash(client, database):
+    payload = event()
+    payload.pop("visitor_id")
+    assert (await send(client, [payload])).json()["accepted"] == 1
+    retry = dict(payload, visitor_id=None)
+    response = await send(client, [retry])
+    assert response.status_code == 200
+    assert response.json()["accepted"] == 0
+    assert response.json()["duplicates"] == 1
+
+
 async def test_out_of_order_navigation_and_real_report(client, database):
     await login(client)
     now = datetime.now(UTC) - timedelta(seconds=10)
@@ -188,10 +201,25 @@ async def test_out_of_order_navigation_and_real_report(client, database):
     data = response.json()
     assert data["case"]["conversion"] == 1
     assert data["case"]["case_views"] == 1
-    assert data["funnel"] == {"opens": 1, "views": 1, "outbound": 1}
+    assert data["funnel"] == {
+        "opens": 1,
+        "views": 1,
+        "outbound": 1,
+        "visitor_opens": None,
+        "visitor_views": None,
+        "visitor_outbound": None,
+    }
     assert data["links"] == [{"link_id": "project_primary", "count": 1}]
     assert response.headers["cache-control"] == "no-store"
-    assert data["countries"] == [{"key": None, "count": 2, "share": 1.0}]
+    assert data["countries"] == [
+        {
+            "key": None,
+            "count": 2,
+            "share": 1.0,
+            "visitor_count": None,
+            "visitor_share": None,
+        }
+    ]
 
 
 async def test_session_attribution_and_concurrent_mixed_batches(client, database):
@@ -442,7 +470,14 @@ async def test_sessions_and_sources_are_reported_without_coverage(client, databa
     report = response.json()
     assert report["summary"]["sessions"]["value"] == 1
     assert report["sources"] == [
-        {"key": "telegram", "count": 1, "share": 1.0, "source_type": "utm"}
+        {
+            "key": "telegram",
+            "count": 1,
+            "share": 1.0,
+            "visitor_count": None,
+            "visitor_share": None,
+            "source_type": "utm",
+        }
     ]
     assert report["coverage"]["partial"] is True
     assert "Сессионные данные покрывают период не полностью." in report["warnings"]
@@ -499,6 +534,59 @@ async def test_device_breakdown_counts_page_views_by_type(client, database):
     response = await client.get("/api/v1/admin/analytics/overview")
     assert response.status_code == 200, response.text
     assert response.json()["devices"] == [
-        {"key": "desktop", "count": 2, "share": 2 / 3},
-        {"key": "mobile", "count": 1, "share": 1 / 3},
+        {
+            "key": "desktop",
+            "count": 2,
+            "share": 2 / 3,
+            "visitor_count": None,
+            "visitor_share": None,
+        },
+        {
+            "key": "mobile",
+            "count": 1,
+            "share": 1 / 3,
+            "visitor_count": None,
+            "visitor_share": None,
+        },
     ]
+
+
+async def test_visitor_metrics_deduplicate_sessions_and_case_conversion(client, database):
+    visitor = uuid4()
+    first_session, second_session = uuid4(), uuid4()
+    now = datetime.now(UTC) - timedelta(seconds=10)
+    home = event(session_id=first_session, visitor_id=visitor, at=now)
+    case_view = event(
+        case_id="airena",
+        session_id=second_session,
+        visitor_id=visitor,
+        at=now + timedelta(seconds=1),
+    )
+    repeated_case_view = event(
+        case_id="airena",
+        session_id=uuid4(),
+        visitor_id=visitor,
+        at=now + timedelta(seconds=2),
+    )
+    outbound = event(
+        "case_outbound_click",
+        "airena",
+        page_view_id=case_view["page_view_id"],
+        session_id=second_session,
+        visitor_id=visitor,
+        at=now + timedelta(seconds=3),
+        sequence=2,
+    )
+    assert (await send(client, [home, case_view, repeated_case_view, outbound])).status_code == 200
+    await login(client)
+
+    response = await client.get("/api/v1/admin/analytics/overview")
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["summary"]["visitors"]["value"] == 1
+    assert payload["daily_series"][-1]["visitors"] == 1
+    airena = next(row for row in payload["cases_preview"] if row["id"] == "airena")
+    assert airena["case_view_sessions"] == 2
+    assert airena["case_view_visitors"] == 1
+    assert airena["outbound_visitors"] == 1
+    assert airena["visitor_conversion"] == 1

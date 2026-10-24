@@ -43,6 +43,7 @@ class AnalyticsEventCreate(BaseModel):
     occurred_at: datetime
     source_site: str = Field(min_length=1, max_length=255)
     session_id: UUID | None = None
+    visitor_id: UUID | None = None
     page_view_id: UUID
     navigation_id: UUID | None = None
     sequence: int = Field(ge=1, le=1000000)

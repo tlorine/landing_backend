@@ -26,6 +26,7 @@ class AnalyticsEvent(Base):
         Index("ix_analytics_site_time", "source_site", "occurred_at"),
         Index("ix_analytics_case_time", "source_site", "case_id", "occurred_at"),
         Index("ix_analytics_session", "source_site", "session_id"),
+        Index("ix_analytics_visitor", "source_site", "visitor_id", "occurred_at"),
         Index("ix_analytics_page", "source_site", "page_view_id"),
         Index("ix_analytics_navigation", "source_site", "navigation_id"),
         CheckConstraint("event_type IN ('page_view','case_open','case_outbound_click')"),
@@ -39,6 +40,7 @@ class AnalyticsEvent(Base):
         DateTime(timezone=True), server_default=func.now()
     )
     session_id: Mapped[UUID | None] = mapped_column(Uuid)
+    visitor_id: Mapped[UUID | None] = mapped_column(Uuid)
     page_view_id: Mapped[UUID] = mapped_column(Uuid)
     navigation_id: Mapped[UUID | None] = mapped_column(Uuid)
     sequence: Mapped[int] = mapped_column(Integer)

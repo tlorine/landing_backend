@@ -32,6 +32,7 @@ class Summary(BaseModel):
     sessions: Metric
     case_views: Metric
     outbound_clicks: Metric
+    visitors: Metric | None = None
 
 
 class Filters(BaseModel):
@@ -49,6 +50,7 @@ class Filters(BaseModel):
 class Coverage(BaseModel):
     available_from: datetime | None
     session_available_from: datetime | None
+    visitor_available_from: datetime | None = None
     partial: bool
     previous_partial: bool
 
@@ -59,12 +61,15 @@ class DailyPoint(BaseModel):
     sessions: int | None
     case_views: int
     outbound_clicks: int
+    visitors: int | None = None
 
 
 class ShareRow(BaseModel):
     key: str | None
     count: int
     share: float = Field(ge=0, le=1)
+    visitor_count: int | None = None
+    visitor_share: float | None = Field(default=None, ge=0, le=1)
 
 
 class SourceRow(ShareRow):
@@ -80,6 +85,9 @@ class CaseRow(BaseModel):
     outbound_clicks: int
     outbound_sessions: int | None
     conversion: float | None = Field(ge=0, le=1)
+    case_view_visitors: int | None = None
+    outbound_visitors: int | None = None
+    visitor_conversion: float | None = Field(default=None, ge=0, le=1)
 
 
 class OverviewResponse(BaseModel):
@@ -114,6 +122,9 @@ class Funnel(BaseModel):
     opens: int
     views: int
     outbound: int
+    visitor_opens: int | None = None
+    visitor_views: int | None = None
+    visitor_outbound: int | None = None
 
 
 class LinkRow(BaseModel):

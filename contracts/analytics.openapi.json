@@ -1346,6 +1346,41 @@
               }
             ],
             "title": "Conversion"
+          },
+          "case_view_visitors": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Case View Visitors"
+          },
+          "outbound_visitors": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outbound Visitors"
+          },
+          "visitor_conversion": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 1.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Visitor Conversion"
           }
         },
         "type": "object",
@@ -1451,6 +1486,18 @@
             ],
             "title": "Session Available From"
           },
+          "visitor_available_from": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Visitor Available From"
+          },
           "partial": {
             "type": "boolean",
             "title": "Partial"
@@ -1537,6 +1584,17 @@
           "outbound_clicks": {
             "type": "integer",
             "title": "Outbound Clicks"
+          },
+          "visitors": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Visitors"
           }
         },
         "type": "object",
@@ -1813,6 +1871,39 @@
           "outbound": {
             "type": "integer",
             "title": "Outbound"
+          },
+          "visitor_opens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Visitor Opens"
+          },
+          "visitor_views": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Visitor Views"
+          },
+          "visitor_outbound": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Visitor Outbound"
           }
         },
         "type": "object",
@@ -2149,6 +2240,30 @@
             "maximum": 1.0,
             "minimum": 0.0,
             "title": "Share"
+          },
+          "visitor_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Visitor Count"
+          },
+          "visitor_share": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 1.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Visitor Share"
           }
         },
         "type": "object",
@@ -2229,6 +2344,30 @@
             "minimum": 0.0,
             "title": "Share"
           },
+          "visitor_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Visitor Count"
+          },
+          "visitor_share": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 1.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Visitor Share"
+          },
           "source_type": {
             "type": "string",
             "title": "Source Type"
@@ -2256,6 +2395,16 @@
           },
           "outbound_clicks": {
             "$ref": "#/components/schemas/Metric"
+          },
+          "visitors": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Metric"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object",
@@ -2347,6 +2496,19 @@
             ],
             "default": null,
             "title": "Session Id"
+          },
+          "visitor_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Visitor Id"
           },
           "page_view_id": {
             "format": "uuid",
