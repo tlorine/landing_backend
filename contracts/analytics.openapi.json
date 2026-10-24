@@ -70,7 +70,7 @@
             }
           },
           "413": {
-            "description": "Content Too Large",
+            "description": "Payload exceeds the maximum request size.",
             "content": {
               "application/json": {
                 "schema": {
@@ -90,7 +90,7 @@
             }
           },
           "422": {
-            "description": "Unprocessable Content",
+            "description": "Request validation failed.",
             "content": {
               "application/json": {
                 "schema": {
@@ -171,7 +171,7 @@
             }
           },
           "422": {
-            "description": "Unprocessable Content",
+            "description": "Request validation failed.",
             "content": {
               "application/json": {
                 "schema": {
@@ -262,7 +262,7 @@
             }
           },
           "422": {
-            "description": "Unprocessable Content",
+            "description": "Request validation failed.",
             "content": {
               "application/json": {
                 "schema": {
@@ -343,7 +343,7 @@
             }
           },
           "422": {
-            "description": "Unprocessable Content",
+            "description": "Request validation failed.",
             "content": {
               "application/json": {
                 "schema": {
@@ -417,7 +417,7 @@
             }
           },
           "422": {
-            "description": "Unprocessable Content",
+            "description": "Request validation failed.",
             "content": {
               "application/json": {
                 "schema": {
@@ -498,7 +498,7 @@
             }
           },
           "422": {
-            "description": "Unprocessable Content",
+            "description": "Request validation failed.",
             "content": {
               "application/json": {
                 "schema": {
@@ -718,7 +718,7 @@
                 }
               }
             },
-            "description": "Unprocessable Content"
+            "description": "Request validation failed."
           },
           "503": {
             "content": {
@@ -974,7 +974,7 @@
                 }
               }
             },
-            "description": "Unprocessable Content"
+            "description": "Request validation failed."
           },
           "503": {
             "content": {
@@ -1187,7 +1187,7 @@
                 }
               }
             },
-            "description": "Unprocessable Content"
+            "description": "Request validation failed."
           },
           "503": {
             "content": {
