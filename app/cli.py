@@ -50,8 +50,8 @@ async def main():
                 from sqlalchemy import text
 
                 await session.execute(
-                    text("SELECT pg_advisory_xact_lock(hashtext(:site))"),
-                    {"site": args.source_site},
+                    text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+                    {"key": f"analytics-coverage:{args.source_site}"},
                 )
                 active = (
                     await session.execute(

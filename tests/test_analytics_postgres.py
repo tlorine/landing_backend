@@ -419,3 +419,69 @@ async def test_historical_sessions_visible_after_ingestion_mode_disabled(
     assert result.json()["summary"]["sessions"]["value"] == 1
     capabilities = (await client.get("/api/v1/admin/analytics/capabilities")).json()
     assert capabilities["session_tracking_enabled"] is False
+
+
+async def test_sessions_and_sources_are_reported_without_coverage(client, database):
+    from sqlalchemy import delete
+
+    async with database() as session, session.begin():
+        await session.execute(delete(AnalyticsCoverage))
+
+    payload = event()
+    payload["entry_context"] = {
+        "entry_page_view_id": payload["page_view_id"],
+        "started_at": payload["occurred_at"],
+        "path": "/",
+        "utm_source": "telegram",
+    }
+    assert (await send(client, [payload])).status_code == 200
+    await login(client)
+
+    response = await client.get("/api/v1/admin/analytics/overview")
+    assert response.status_code == 200, response.text
+    report = response.json()
+    assert report["summary"]["sessions"]["value"] == 1
+    assert report["sources"] == [
+        {"key": "telegram", "count": 1, "share": 1.0, "source_type": "utm"}
+    ]
+    assert report["coverage"]["partial"] is True
+    assert "Сессионные данные покрывают период не полностью." in report["warnings"]
+
+
+async def test_coverage_is_created_and_reconciled_automatically(database, monkeypatch):
+    from sqlalchemy import delete
+
+    from app.services.analytics_coverage import AnalyticsCoverageService
+
+    async with database() as session, session.begin():
+        await session.execute(delete(AnalyticsCoverage))
+
+    now = datetime.now(UTC)
+    coverage = AnalyticsCoverageService(database, settings)
+    await asyncio.gather(coverage.reconcile(now), coverage.reconcile(now))
+    async with database() as session:
+        rows = list((await session.scalars(select(AnalyticsCoverage))).all())
+    assert len(rows) == 1
+    assert rows[0].ended_at is None
+    assert rows[0].sessions_enabled is True
+
+    monkeypatch.setattr(settings, "analytics_sessions_enabled", False)
+    await coverage.reconcile(now + timedelta(seconds=10))
+    async with database() as session:
+        rows = list(
+            (
+                await session.scalars(
+                    select(AnalyticsCoverage).order_by(AnalyticsCoverage.started_at)
+                )
+            ).all()
+        )
+    assert len(rows) == 2
+    assert rows[0].ended_at == now + timedelta(seconds=10)
+    assert rows[1].ended_at is None
+    assert rows[1].sessions_enabled is False
+
+    monkeypatch.setattr(settings, "analytics_enabled", False)
+    await coverage.reconcile(now + timedelta(seconds=20))
+    async with database() as session:
+        rows = list((await session.scalars(select(AnalyticsCoverage))).all())
+    assert all(row.ended_at is not None for row in rows)

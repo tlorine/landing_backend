@@ -261,10 +261,10 @@ Rollout order:
    admin with `python -m app.cli admin-set-password USERNAME` (interactive password,
    minimum 12 characters, no default account). Password change revokes all sessions.
 4. Enable ADMIN_ENABLED, ANALYTICS_ENABLED and, only with agreed disclosure,
-   ANALYTICS_SESSIONS_ENABLED. Start explicit coverage with
-   `python -m app.cli analytics-coverage start studio-landing` at frontend rollout.
-   Stop coverage on rollback with `... analytics-coverage stop studio-landing`;
-   after a mode change start a fresh interval. Missing intervals remain visible.
+   ANALYTICS_SESSIONS_ENABLED. API startup automatically opens, closes or rotates
+   coverage intervals to match the backend flags for each configured site. Keep the
+   frontend build flags aligned; missing history is reported as partial coverage.
+   The `analytics-coverage` CLI remains available for deliberate manual correction.
 5. Switch frontend from legacy visit beacon to event pipeline once, never dual-send.
    Each newly committed page_view creates exactly one SiteVisit compatibility
    projection in the SAME transaction, preserving Telegram /visits and /sources.

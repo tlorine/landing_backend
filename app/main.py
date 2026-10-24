@@ -23,6 +23,7 @@ from app.db.session import SessionFactory, engine
 from app.repositories.notification_outbox import NotificationOutboxRepository
 from app.repositories.service_requests import ServiceRequestRepository
 from app.repositories.site_visits import SiteVisitRepository
+from app.services.analytics_coverage import AnalyticsCoverageService
 from app.services.analytics_retention import AnalyticsRetentionWorker
 from app.services.bot_worker import TelegramCommandWorker
 from app.services.notification_worker import NotificationWorker
@@ -41,6 +42,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     notifier: TelegramNotifier | None = None
     command_task: asyncio.Task[None] | None = None
     bot_api: TelegramBotApi | None = None
+
+    # Keep coverage metadata in sync with the backend ingestion flags automatically.
+    await AnalyticsCoverageService(SessionFactory, settings).reconcile()
 
     # Retention runs regardless of Telegram: old visits and salts must be deleted anyway.
     retention = VisitRetentionWorker(SessionFactory, SiteVisitRepository(), settings)

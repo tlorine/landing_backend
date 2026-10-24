@@ -178,6 +178,12 @@ class AnalyticsReportsService:
                 and (row.ended_at or now) > start
                 for row in coverage_rows
             )
+            # Coverage describes completeness; real stored session facts remain reportable
+            # even when an operator has not registered the interval yet.
+            if not sessions:
+                sessions = await self.repository.has_sessions(session, filters, start, end)
+            if not sessions:
+                sessions = await self.repository.has_sessions(session, filters, pstart, pend)
             current = await self.repository.totals(session, filters, start, end, sessions)
             previous = await self.repository.totals(session, filters, pstart, pend, sessions)
             summary = {}

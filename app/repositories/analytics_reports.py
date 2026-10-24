@@ -63,6 +63,13 @@ class AnalyticsReportsRepository:
             .one()
         )
 
+    async def has_sessions(self, session, filters, start, end):
+        events = self.scoped(filters, start, end)
+        result = await session.execute(
+            select(events.c.event_id).where(events.c.session_id.is_not(None)).limit(1)
+        )
+        return result.scalar_one_or_none() is not None
+
     async def daily(self, session, filters, start, end, sessions):
         events = self.scoped(filters, start, end)
         day = cast(func.timezone(filters.timezone, events.c.occurred_at), String)
