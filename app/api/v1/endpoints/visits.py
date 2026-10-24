@@ -13,6 +13,7 @@ from app.core.config import settings
 from app.db.session import get_session
 from app.repositories.site_visits import SiteVisitRepository
 from app.schemas.site_visit import VisitCreate
+from app.services.client_context import client_context
 from app.services.rate_limit import SlidingWindowRateLimiter
 from app.services.user_agent import is_bot
 from app.services.visits import VisitService
@@ -43,18 +44,11 @@ def _error(status_code: int, code: str, message: str) -> JSONResponse:
 
 
 def _country(request: Request) -> str | None:
-    value = request.headers.get("cf-ipcountry", "").strip().upper()
-    if _COUNTRY_RE.fullmatch(value) and value not in _UNKNOWN_COUNTRIES:
-        return value
-    return None
+    return client_context(request).country
 
 
 def _client_ip(request: Request) -> str:
-    # Used only for the daily hash and the rate limit; never stored or logged.
-    forwarded = request.headers.get("cf-connecting-ip", "").strip()
-    if forwarded:
-        return forwarded
-    return request.client.host if request.client else ""
+    return client_context(request).ip
 
 
 async def _read_limited_body(request: Request) -> bytes | None:

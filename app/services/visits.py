@@ -35,27 +35,41 @@ class VisitService:
         country: str | None,
         now: datetime | None = None,
     ) -> None:
+        async with session.begin():
+            salt = await self.record_in_transaction(session, payload, ip, user_agent, country, now)
+        today = (now or datetime.now(UTC)).astimezone(self._tz).date()
+        self._cached_salt = (today, salt)
+
+    async def record_in_transaction(
+        self,
+        session: AsyncSession,
+        payload: VisitCreate,
+        ip: str,
+        user_agent: str,
+        country: str | None,
+        now: datetime | None = None,
+    ) -> bytes:
+        """Caller owns commit; used by idempotent analytics compatibility projection."""
         today = (now or datetime.now(UTC)).astimezone(self._tz).date()
         ua_info = parse_user_agent(user_agent)
-        async with session.begin():
-            salt = await self._salt_for(session, today)
-            visit = SiteVisit(
-                source_site=payload.source_site,
-                path=payload.path,
-                locale=payload.locale,
-                country=country,
-                device_type=payload.device_type or ua_info.device_type,
-                os=ua_info.os,
-                browser=ua_info.browser,
-                referrer_host=payload.referrer_host,
-                utm_source=payload.utm_source,
-                utm_medium=payload.utm_medium,
-                utm_campaign=payload.utm_campaign,
-                visitor_hash=visitor_hash(salt, ip, user_agent, payload.source_site),
-            )
-            await self._repository.add(session, visit)
-        # Cache only after commit, so a rolled-back salt is never reused.
-        self._cached_salt = (today, salt)
+        # Do not cache an uncommitted salt across requests or rollback.
+        salt = await self._salt_for(session, today)
+        visit = SiteVisit(
+            source_site=payload.source_site,
+            path=payload.path,
+            locale=payload.locale,
+            country=country,
+            device_type=payload.device_type or ua_info.device_type,
+            os=ua_info.os,
+            browser=ua_info.browser,
+            referrer_host=payload.referrer_host,
+            utm_source=payload.utm_source,
+            utm_medium=payload.utm_medium,
+            utm_campaign=payload.utm_campaign,
+            visitor_hash=visitor_hash(salt, ip, user_agent, payload.source_site),
+        )
+        await self._repository.add(session, visit)
+        return salt
 
     async def _salt_for(self, session: AsyncSession, day: date) -> bytes:
         if self._cached_salt is not None and self._cached_salt[0] == day:

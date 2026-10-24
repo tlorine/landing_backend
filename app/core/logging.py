@@ -3,7 +3,7 @@ import logging
 from app.core.config import settings
 
 # Access log lines include the client address; visit beacons must never log it.
-_PRIVATE_PATHS = ("/api/v1/visits",)
+_PRIVATE_PATHS = ("/api/v1/visits", "/api/v1/analytics", "/api/v1/admin")
 
 
 class _PrivatePathFilter(logging.Filter):

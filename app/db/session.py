@@ -8,6 +8,7 @@ engine = create_async_engine(
     settings.database_url,
     echo=settings.sql_echo,
     pool_pre_ping=True,
+    hide_parameters=True,
 )
 
 SessionFactory = async_sessionmaker(

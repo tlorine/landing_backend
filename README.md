@@ -245,3 +245,89 @@ ruff check app tests migrations
 - `source_site` задаёт клиент и его можно подделать.
 - Nginx-конфиг — образец, не готовая конфигурация с TLS.
 - Для серьёзной нагрузки стоит вынести worker в отдельный процесс и добавить мониторинг очереди/ошибок доставки.
+
+
+## Web analytics and admin API
+
+The new module extends the same PostgreSQL database and endpoint → service →
+repository architecture. No Redis, parallel auth server or analytics vendor is
+required. API contract/auth handshake: [contracts/README.md](contracts/README.md).
+
+Rollout order:
+1. Back up data and apply `alembic upgrade head`; existing requests/outbox/visits
+   are preserved. New tables are additive. CI checks PostgreSQL migration drift.
+2. Install the frontend-generated `contracts/cases.json` manifest backend-first.
+3. Configure exact `ADMIN_ORIGINS`, same-origin admin proxy and TLS. Provision an
+   admin with `python -m app.cli admin-set-password USERNAME` (interactive password,
+   minimum 12 characters, no default account). Password change revokes all sessions.
+4. Enable ADMIN_ENABLED, ANALYTICS_ENABLED and, only with agreed disclosure,
+   ANALYTICS_SESSIONS_ENABLED. Start explicit coverage with
+   `python -m app.cli analytics-coverage start studio-landing` at frontend rollout.
+   Stop coverage on rollback with `... analytics-coverage stop studio-landing`;
+   after a mode change start a fresh interval. Missing intervals remain visible.
+5. Switch frontend from legacy visit beacon to event pipeline once, never dual-send.
+   Each newly committed page_view creates exactly one SiteVisit compatibility
+   projection in the SAME transaction, preserving Telegram /visits and /sources.
+   Retries do not duplicate either table. Legacy clients remain accepted.
+
+Compatibility note: projected SiteVisit referrer/UTM use session entry_context,
+so new clients retain acquisition attribution across internal navigation. Original
+legacy /visits keeps its original per-page semantics. Dashboard reads only new
+events, never sums projected SiteVisit with them. Legacy visitor_hash remains a
+salted daily IP+UA approximation, not a stable monthly visitor or a session, and
+is never joined to analytics session_id. New raw events contain no raw IP/UA/hash.
+Backend opt-in defaults preserve current behavior until a coordinated rollout.
+
+Deployment: proxy `/api/v1/admin/` on the FRONTEND origin directly to this API;
+admin fetches do not use NEXT_PUBLIC_API_URL. Same-origin works without enabling
+credentialed global CORS. Public ingestion retains exact CORS allowlist and no
+credentials. Never CDN-cache admin endpoints or app admin pages. Browser cookies
+are Secure only in production. Local dev must proxy admin API too.
+
+The shipped nginx example is a template: split limits into ingestion (e.g. 120/min),
+admin reports (e.g. 120/min), and login (e.g. 10/min) before enabling the new UI;
+the old blanket 10/min API limit is insufficient. Enforce body sizes at edge.
+For Cloudflare geo, keep origin private/firewalled to Cloudflare, strip untrusted
+CF headers at the edge, pass validated CF headers to API, set TRUSTED_PROXY_CIDRS
+to the immediate trusted peer range and TRUST_CLOUDFLARE_HEADERS=true. Loopback
+alone is NOT proof of Cloudflare origin. Defaults deliberately ignore CF headers,
+including for legacy /visits, until that trust is configured. Test forged headers.
+Avoid access log query strings for public URLs carrying transient an_nav IDs.
+
+Operate as ONE API process for now: existing Telegram polling/retention lifespan
+workers and in-memory ingestion limiter are not multi-replica coordination. Edge
+limits supplement application limits; auth attempt counters are transactional in
+PostgreSQL and survive restart (10 attempts per account and peer/15min).
+Before scaling processes, separate singleton workers and use a shared rate limiter.
+Admin opaque session tokens are only stored hashed; Argon2id protects passwords.
+Expired sessions and short-lived login counters are periodically deleted. IP-derived
+throttle keys are transient auth-security data, not stored in analytics facts.
+
+Retention: old visits retain VISITS_RETENTION_MONTHS (default 12). New raw events
+retain ANALYTICS_RETENTION_MONTHS (minimum/default 13); cleanup commits bounded
+5000-event batches, max 100k/cycle. Session attribution survives while referenced
+events survive. Coverage intervals are retained, and reports disclose the actual
+retained range. A 366-day report's previous period may not be retained: deltas then
+return null rather than inventing historical zeros. No approximate rollups.
+
+Checks: `ruff check .`, `ruff format --check .`, `APP_ENV=test pytest -q`.
+Real concurrency tests additionally require isolated
+`TEST_DATABASE_URL=postgresql+asyncpg://.../analytics_test` and migrated schema.
+Tests explicitly refuse non-test databases; do not point them at production.
+APP_ENV=test skips local .env to isolate credentials/workers. CI runs PostgreSQL 16,
+legacy regressions, migration drift, atomic retry/rollback and auth/report tests.
+
+Rollback: disable new frontend pipeline (back to legacy), stop coverage, hide admin
+if necessary; keep additive tables and data. Do not downgrade/drop analytics tables
+as an operational rollback. Check ingestion 4xx/409/429/5xx, response latency, accepted
+vs duplicate counts, event-to-SiteVisit projection consistency and coverage gaps.
+Beacon delivery and bot filtering are best-effort; clicks show intent, not successful
+external loading. No cross-device or cross-tab person identification is claimed.
+
+Production rollout gate: before deploying the backend trust hardening, verify the
+actual Cloudflare → edge → API chain with two distinct clients: correct countries
+and distinct daily visitor hashes, and rejection of forged CF headers. A shared
+nginx peer IP without sanitized original client context can collapse approximate
+legacy visitors as well as lose geo. Never deploy this config blindly; backend
+reports warn when trusted geo is not configured. Existing production config was
+not inspected or changed during implementation.

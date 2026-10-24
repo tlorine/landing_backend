@@ -24,7 +24,9 @@ def repository() -> FakeSiteVisitRepository:
 
 
 @pytest.fixture
-def client(repository: FakeSiteVisitRepository) -> Iterator[TestClient]:
+def client(repository: FakeSiteVisitRepository, monkeypatch) -> Iterator[TestClient]:
+    monkeypatch.setattr(visits_endpoint.settings, "trust_cloudflare_headers", True)
+    monkeypatch.setattr(visits_endpoint.settings, "trusted_proxy_cidrs", ["127.0.0.0/8"])
     service = VisitService(repository, tz=visits_endpoint.settings.stats_zone)
     limiter = SlidingWindowRateLimiter(limit=3)
 
@@ -36,7 +38,7 @@ def client(repository: FakeSiteVisitRepository) -> Iterator[TestClient]:
     app.dependency_overrides[visits_endpoint.get_rate_limiter] = lambda: limiter
     try:
         # No context manager: the lifespan (DB, Telegram workers) is not started.
-        yield TestClient(app)
+        yield TestClient(app, client=("127.0.0.1", 50000))
     finally:
         app.dependency_overrides.clear()
 

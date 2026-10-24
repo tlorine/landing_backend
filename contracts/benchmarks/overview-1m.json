@@ -1,0 +1,51 @@
+{
+  "rows": 1000000,
+  "sessions": 100000,
+  "period_days": 30,
+  "overview_seconds": [
+    8.780851209070534,
+    6.575838540913537,
+    5.212511165998876
+  ],
+  "summary": {
+    "page_views": {
+      "value": 248298,
+      "previous_value": 250000,
+      "delta_abs": -1702,
+      "delta_percent": -0.006808
+    },
+    "sessions": {
+      "value": 49660,
+      "previous_value": 50001,
+      "delta_abs": -341,
+      "delta_percent": -0.0068198636027279455
+    },
+    "case_views": {
+      "value": 248298,
+      "previous_value": 250000,
+      "delta_abs": -1702,
+      "delta_percent": -0.006808
+    },
+    "outbound_clicks": {
+      "value": 248299,
+      "previous_value": 250000,
+      "delta_abs": -1701,
+      "delta_percent": -0.006804
+    }
+  },
+  "explain_summary": [
+    "Aggregate  (cost=219617.65..219617.66 rows=1 width=32) (actual time=1445.108..1445.111 rows=1 loops=1)",
+    "  Buffers: shared hit=52107 read=197357",
+    "  ->  Index Scan using ix_analytics_session on analytics_events  (cost=0.43..201507.16 rows=1034885 width=37) (actual time=11.940..1359.854 rows=496597 loops=1)",
+    "        Index Cond: ((source_site)::text = 'studio-landing'::text)",
+    "        Filter: ((occurred_at >= '2026-09-25 00:00:00+00'::timestamp with time zone) AND (occurred_at < '2026-10-25 00:00:00+00'::timestamp with time zone))",
+    "        Rows Removed by Filter: 503403",
+    "        Buffers: shared hit=52107 read=197357",
+    "Planning Time: 0.307 ms",
+    "JIT:",
+    "  Functions: 7",
+    "  Options: Inlining false, Optimization false, Expressions true, Deforming true",
+    "  Timing: Generation 1.730 ms, Inlining 0.000 ms, Optimization 2.491 ms, Emission 9.630 ms, Total 13.850 ms",
+    "Execution Time: 1447.136 ms"
+  ]
+}

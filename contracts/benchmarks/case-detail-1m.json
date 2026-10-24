@@ -1,0 +1,48 @@
+{
+  "detail_seconds": [
+    7.8933762919623405,
+    4.600428208010271,
+    4.1616663748864084
+  ],
+  "case": {
+    "id": "airena",
+    "has_outbound_link": true,
+    "case_opens": 0,
+    "case_views": 248298,
+    "case_view_sessions": 49660,
+    "outbound_clicks": 248299,
+    "outbound_sessions": 49660,
+    "conversion": 1.0
+  },
+  "funnel": {
+    "opens": 0,
+    "views": 0,
+    "outbound": 0
+  },
+  "explain_case": [
+    "GroupAggregate  (cost=0.42..6296733.78 rows=1 width=23) (actual time=1214.824..1214.825 rows=1 loops=1)",
+    "  Buffers: shared hit=1031919 read=101213",
+    "  ->  Index Scan using ix_analytics_session on analytics_events e  (cost=0.42..179519.26 rows=507758 width=83) (actual time=223.491..627.699 rows=496597 loops=1)",
+    "        Index Cond: ((source_site)::text = 'studio-landing'::text)",
+    "        Filter: ((occurred_at >= '2026-09-25 00:00:00+00'::timestamp with time zone) AND (occurred_at < '2026-10-25 00:00:00+00'::timestamp with time zone) AND ((case_id)::text = 'airena'::text))",
+    "        Rows Removed by Filter: 503403",
+    "        Buffers: shared hit=37313 read=94618",
+    "  SubPlan 1",
+    "    ->  Index Scan using ix_analytics_page on analytics_events c  (cost=0.42..12.04 rows=1 width=0) (actual time=0.002..0.002 rows=1 loops=248298)",
+    "          Index Cond: (((source_site)::text = (e.source_site)::text) AND (page_view_id = e.page_view_id))",
+    "          Filter: ((sequence > e.sequence) AND (occurred_at >= e.occurred_at) AND (occurred_at < '2026-10-25 00:00:00+00'::timestamp with time zone) AND ((case_id)::text = (e.case_id)::text) AND (session_id = e.session_id) AND ((locale)::text = (e.locale)::text) AND ((event_type)::text = 'case_outbound_click'::text))",
+    "          Rows Removed by Filter: 1",
+    "          Buffers: shared hit=994606 read=6595",
+    "Planning Time: 0.141 ms",
+    "JIT:",
+    "  Functions: 29",
+    "  Options: Inlining true, Optimization true, Expressions true, Deforming true",
+    "  Timing: Generation 3.358 ms, Inlining 11.548 ms, Optimization 107.998 ms, Emission 103.900 ms, Total 226.803 ms",
+    "Execution Time: 1218.274 ms"
+  ],
+  "postgres_settings": {
+    "shared_buffers": "128MB",
+    "work_mem": "4MB",
+    "max_parallel_workers_per_gather": "2"
+  }
+}

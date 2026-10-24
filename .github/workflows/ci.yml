@@ -50,3 +50,45 @@ jobs:
 
       - name: Tests
         run: pytest -q
+
+  postgres-integration:
+    name: Analytics PostgreSQL integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: analytics_test
+          POSTGRES_PASSWORD: analytics_test
+          POSTGRES_DB: analytics_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U analytics_test -d analytics_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      APP_ENV: test
+      DATABASE_URL: postgresql+asyncpg://analytics_test:analytics_test@localhost:5432/analytics_test
+      TEST_DATABASE_URL: postgresql+asyncpg://analytics_test:analytics_test@localhost:5432/analytics_test
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements-dev.txt
+      - name: Upgrade existing schema then analytics
+        run: |
+          alembic upgrade 0002_site_visits
+          PYTHONPATH=. python scripts/check-populated-migration.py seed
+          alembic upgrade head
+          PYTHONPATH=. python scripts/check-populated-migration.py verify
+          alembic check
+      - run: pytest -q tests/test_analytics_postgres.py
+      - name: Check contract artifact
+        run: |
+          PYTHONPATH=. python scripts/export-analytics-contract.py
+          git diff --exit-code contracts/analytics.openapi.json

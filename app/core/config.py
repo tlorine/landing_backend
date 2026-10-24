@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from typing import Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -33,6 +34,19 @@ class Settings(BaseSettings):
     notification_poll_interval_seconds: float = Field(default=3.0, ge=1.0, le=60.0)
     notification_retry_max_seconds: int = Field(default=3600, ge=60, le=86400)
 
+    analytics_enabled: bool = False
+    analytics_sessions_enabled: bool = False
+    analytics_sites: list[str] = Field(default_factory=lambda: ["studio-landing"])
+    analytics_rate_limit_per_minute: int = Field(default=120, ge=1, le=6000)
+    analytics_retention_months: int = Field(default=13, ge=13, le=36)
+    admin_enabled: bool = False
+    admin_origins: list[str] = Field(
+        default_factory=lambda: ["http://localhost:5173", "http://localhost:3001"]
+    )
+    admin_session_hours: int = Field(default=12, ge=1, le=168)
+    trust_cloudflare_headers: bool = False
+    trusted_proxy_cidrs: list[str] = Field(default_factory=list)
+
     stats_timezone: str = "Europe/Moscow"
     visits_retention_months: int = Field(default=12, ge=1, le=36)
     visits_rate_limit_per_minute: int = Field(default=30, ge=1, le=600)
@@ -48,7 +62,7 @@ class Settings(BaseSettings):
             raise ValueError(f"Unknown time zone {value!r} in STATS_TIMEZONE.") from exc
         return value
 
-    @field_validator("cors_origins")
+    @field_validator("cors_origins", "admin_origins")
     @classmethod
     def validate_cors_origins(cls, origins: list[str]) -> list[str]:
         # The browser sends Origin without a trailing slash; a mismatch silently blocks requests.
@@ -73,6 +87,15 @@ class Settings(BaseSettings):
             )
         return self
 
+    @field_validator("trusted_proxy_cidrs")
+    @classmethod
+    def validate_proxy_cidrs(cls, values: list[str]) -> list[str]:
+        from ipaddress import ip_network
+
+        for value in values:
+            ip_network(value)
+        return values
+
     @property
     def telegram_enabled(self) -> bool:
         return bool(self.telegram_bot_token and self.telegram_chat_id)
@@ -82,4 +105,4 @@ class Settings(BaseSettings):
         return ZoneInfo(self.stats_timezone)
 
 
-settings = Settings()
+settings = Settings(_env_file=None) if os.environ.get("APP_ENV") == "test" else Settings()

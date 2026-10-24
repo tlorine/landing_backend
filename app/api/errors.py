@@ -53,11 +53,14 @@ async def validation_error_handler(
 
 
 async def database_error_handler(request: Request, exc: SQLAlchemyError) -> JSONResponse:
+    # PostgreSQL error DETAIL can include complete row values even when SQLAlchemy
+    # hides bind parameters. Log only safe classification, never exception payload.
     logger.error(
-        "Database error while handling %s %s",
+        "Database error: method=%s path=%s type=%s sqlstate=%s",
         request.method,
         request.url.path,
-        exc_info=(type(exc), exc, exc.__traceback__),
+        type(exc).__name__,
+        getattr(getattr(exc, "orig", None), "sqlstate", None),
     )
     return JSONResponse(
         status_code=503,
