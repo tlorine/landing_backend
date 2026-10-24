@@ -229,6 +229,7 @@ class AnalyticsReportsService:
                 if sessions
                 else []
             )
+            devices = await self.repository.devices(session, filters, start, end)
             cases = await self.repository.cases(session, filters, start, end, sessions)
             warnings = []
             if not settings.trust_cloudflare_headers or not settings.trusted_proxy_cidrs:
@@ -261,6 +262,7 @@ class AnalyticsReportsService:
                 "daily_series": series,
                 "countries": countries,
                 "sources": sources,
+                "devices": devices,
                 "cases_preview": cases,
             }
             if detail:

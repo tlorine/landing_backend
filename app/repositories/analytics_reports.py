@@ -118,6 +118,26 @@ class AnalyticsReportsRepository:
             )
         return result
 
+    async def devices(self, session, filters, start, end):
+        events = self.scoped(filters, start, end)
+        rows = (
+            await session.execute(
+                select(events.c.device_type, func.count().label("count"))
+                .where(events.c.event_type == "page_view")
+                .group_by(events.c.device_type)
+                .order_by(func.count().desc(), events.c.device_type)
+            )
+        ).all()
+        total = sum(row.count for row in rows)
+        return [
+            {
+                "key": row.device_type,
+                "count": row.count,
+                "share": row.count / total if total else 0,
+            }
+            for row in rows
+        ]
+
     async def cases(self, session, filters, start, end, sessions):
         events = self.scoped(filters, start, end)
         view = and_(events.c.event_type == "page_view", events.c.case_id.is_not(None))

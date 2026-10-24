@@ -93,6 +93,7 @@ class OverviewResponse(BaseModel):
     daily_series: list[DailyPoint]
     countries: list[ShareRow]
     sources: list[SourceRow]
+    devices: list[ShareRow]
     cases_preview: list[CaseRow]
 
 

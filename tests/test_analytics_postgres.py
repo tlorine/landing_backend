@@ -485,3 +485,20 @@ async def test_coverage_is_created_and_reconciled_automatically(database, monkey
     async with database() as session:
         rows = list((await session.scalars(select(AnalyticsCoverage))).all())
     assert all(row.ended_at is not None for row in rows)
+
+
+async def test_device_breakdown_counts_page_views_by_type(client, database):
+    desktop_one = event()
+    desktop_two = event()
+    mobile = event()
+    desktop_two["device_type"] = "desktop"
+    mobile["device_type"] = "mobile"
+    assert (await send(client, [desktop_one, desktop_two, mobile])).status_code == 200
+    await login(client)
+
+    response = await client.get("/api/v1/admin/analytics/overview")
+    assert response.status_code == 200, response.text
+    assert response.json()["devices"] == [
+        {"key": "desktop", "count": 2, "share": 2 / 3},
+        {"key": "mobile", "count": 1, "share": 1 / 3},
+    ]

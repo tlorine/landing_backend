@@ -1602,6 +1602,13 @@
             "type": "array",
             "title": "Sources"
           },
+          "devices": {
+            "items": {
+              "$ref": "#/components/schemas/ShareRow"
+            },
+            "type": "array",
+            "title": "Devices"
+          },
           "cases_preview": {
             "items": {
               "$ref": "#/components/schemas/CaseRow"
@@ -1635,6 +1642,7 @@
           "daily_series",
           "countries",
           "sources",
+          "devices",
           "cases_preview",
           "case",
           "funnel",
@@ -2002,6 +2010,13 @@
             "type": "array",
             "title": "Sources"
           },
+          "devices": {
+            "items": {
+              "$ref": "#/components/schemas/ShareRow"
+            },
+            "type": "array",
+            "title": "Devices"
+          },
           "cases_preview": {
             "items": {
               "$ref": "#/components/schemas/CaseRow"
@@ -2022,6 +2037,7 @@
           "daily_series",
           "countries",
           "sources",
+          "devices",
           "cases_preview"
         ],
         "title": "OverviewResponse"
